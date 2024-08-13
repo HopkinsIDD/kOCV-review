@@ -1,0 +1,1864 @@
+---
+title: "Updated Systematic Review and Meta-Analysis of Oral Cholera Vaccine (OCV) Effectiveness"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+Extraction gsheet here: https://docs.google.com/spreadsheets/d/1H2PyHbn7Ec2x9SHmLZIeh_6nkdqlZr0euIMO4Luy6Bw/edit#gid=646221433
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message=FALSE, 
+                      warning=FALSE)
+
+library(metafor)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(countrycode)
+library(stringr)
+library(flextable)
+library(meta)
+library(reactable)
+library(cowplot)
+library(tidyr)
+library(RcmdrMisc)
+library(here)
+library(scales)
+
+library(gridGraphics)
+library(gridExtra)
+library(ggpubr)
+
+tab.counter <- 1
+fig.counter <- 1
+
+source("utils_OCV_SR.R")
+```
+
+
+```{r load data}
+df_new <- read.csv(here("data/extracted_SR_data_2016_2022.csv"))
+df_old_FollowupPeriod <- read.csv(here("data/FollowupPeriodData.csv"))
+df_old_main <- read.csv(here("data/ve_meansvar.csv"))
+efficacy_studies <- read.csv(here("data/efficacy_studies.csv"))
+effectiveness_studies <- read.csv(here("data/effectiveness_studies.csv"))
+
+# df_new <- read.csv("../data/extracted_SR_data_2016_2022.csv")
+# df_old_FollowupPeriod <- read.csv("../data/FollowupPeriodData.csv")
+# df_old_main <- read.csv("../data/ve_meansvar.csv")
+# efficacy_studies <- read.csv("../data/efficacy_studies.csv")
+# effectiveness_studies <- read.csv("../data/effectiveness_studies.csv")
+```
+
+
+```{r clean data}
+# first, correct a mistake in the old dataset
+df_old_main <- df_old_main |>
+  mutate(VE.l = ifelse(Author..Year == "Ivers et al, 2015" & VE.l == -85,
+                       -8.5, VE.l))
+
+# clean the new data
+df_new <- df_new |>
+  mutate(StudyType = ifelse(study_type == "Observational", "Effectiveness", "Efficacy")) |> 
+  mutate(Location = countrycode(ISO, "iso3c", "country.name")) |>
+  dplyr::rename(Paper = study_id, Mean.VE = ve_est, VE.l = ve_lb, VE.u = ve_ub) |> 
+  mutate(Mean.VE = Mean.VE / 100, VE.l = VE.l / 100, VE.u = VE.u / 100) |> 
+  dplyr::rename(Dose = n_doses) |> 
+  mutate(Location = ifelse(str_detect(Paper, "Malembaka"), "COD", Location))
+
+# exclude data rows:
+# Ali 2015 that used WC-rBS 
+df_new <- df_new |> 
+  filter(!Paper %in% c("Ali et al. 2015a", "Ali et al. 2015b", "Ali et al. 2015c") )
+
+#####################################
+# make df_FollowupPeriod (old + new)
+#####################################
+# This dataset contains the VE by follow up period, the cumulative estimates extracted from the papers are not included in this datase. If a study provides VE by follow up period for both all-age group and stratified age groups, only VE for all-age group is included here to avoid overlapping data. If both longer and shorter follow up periods were extracted, i.e., VE for 0-6, 6-12, 12-18, 18-24 as well as 0-12, 12-24 were extracted, only VE for shorter follow up period are included here (i.e., VE for 0-6,...).
+df_FollowupPeriod <- df_new |> 
+  dplyr::select(TL, TR,StudyType, Location, Paper, Mean.VE, VE.l, VE.u, yearid, Dose) |> 
+  mutate(new.old = "new") |> 
+  rbind(
+    df_old_FollowupPeriod |>  
+      mutate(Mean.VE = Mean.VE/100, VE.l = VE.l/100, VE.u = VE.u/100) |> 
+      dplyr::select(TL, TR, StudyType, Location, Paper, Mean.VE, VE.l, VE.u, yearid, Dose) |> 
+      mutate(new.old = "old")
+  ) |> 
+  mutate(TL = round(TL)) |> 
+  mutate(StudyID = ifelse(str_sub(Paper, -1) %in% c(0:9) == FALSE, str_sub(Paper, end = -2), Paper)) |> 
+  mutate(StudyType = ifelse(StudyType == "Efficacy ", "Efficacy", StudyType)) |> 
+  # remove duplicate data rows
+  filter(Paper != "Qadri et al, 2018i" & Paper != "Qadri et al, 2018j") |> 
+  filter(Paper != "Qadri et al, 2016a" & Paper != "Qadri et al, 2016b" &
+           Paper != "Qadri et al, 2016c" & Paper != "Qadri et al, 2016d") |> 
+  # remove the cumulative data rows
+  filter(!Paper %in% c("Malembaka et al. 2023g", "Malembaka et al. 2023h", "Malembaka et al. 2023i",
+                       "Malembaka et al. 2023p", "Malembaka et al. 2023q", "Malembaka et al. 2023r",
+                       "Ali et al. 2015a", "Ali et al. 2015b", "Ali et al. 2015c") ) |>
+  # remove the stratified data from Espoir's estimates
+  filter(Paper != "Malembaka et al. 2023b" & Paper != "Malembaka et al. 2023c" &
+         Paper != "Malembaka et al. 2023e" & Paper != "Malembaka et al. 2023f" &
+         Paper != "Malembaka et al. 2023k" & Paper != "Malembaka et al. 2023l" &
+         Paper != "Malembaka et al. 2023n" & Paper != "Malembaka et al. 2023o") |> 
+  # calculate yi and se 
+  mutate(se = ifelse(is.na(VE.u), 
+                     (log(1-Mean.VE)-log(1-VE.l))/qnorm(0.95), 
+                     (log(1-VE.l) - log(1-VE.u))/(2*qnorm(.975))),
+         yi = log(1-Mean.VE))
+  
+# used in Qifang's code to deal with "se = Inf" 
+azman_id <- which(df_FollowupPeriod$Paper=="Azman et al, 2016")
+df_FollowupPeriod[azman_id,'se'] <- (log(1-df_FollowupPeriod[azman_id,'Mean.VE'])-
+                                      log(1-df_FollowupPeriod[azman_id,'VE.l']))/(2*qnorm(.975))*2 
+  
+# adding endemicity variable to followup period dataset (pending)
+df_FollowupPeriod <- df_FollowupPeriod |>
+  mutate(endemicity = case_when(Location %in% c("Bangladesh", "Guinea ", "Haiti", "India", "Malawi", "Mozambique", "Peru", "Tanzania", "Vietnam")  ~ "endemic",
+                                Location %in% c("South Sudan") ~ "epidemic",
+                                Location == "Zambia" & Paper == "Ferreras et al, 2018" ~ "epidemic",
+                                Location == "Zambia" & (Paper == "Sialubanje et al, 2022a" | Paper == "Sialubanje et al, 2022b") ~ "endemic"))
+
+# add vaccine class to the follow up 
+vax_class <- df_new |> dplyr::select(Paper, vaccine_class) |>
+  rbind(
+    df_old_main |> rename(Paper = Author..Year, vaccine_class = Vaccine) |>
+      dplyr::select(Paper, vaccine_class)
+  ) |> unique()
+
+df_FollowupPeriod <- df_FollowupPeriod |> 
+  left_join(vax_class, by = c("Paper"))
+
+df_FollowupPeriod <- df_FollowupPeriod |>
+  mutate(vaccine_class = case_when(Paper %in% c("Bhattacharya et al, 2013", 
+                                                "Sur et al, 2009",
+                                                "van Loon et al, 1996a",
+                                                "Clemens et al, 1988a") ~ "WC",
+                                   Paper %in% c("van Loon et al, 1996b",
+                                                "Clemens et al, 1988b") ~ "WC-rBS",
+                                   TRUE ~ vaccine_class)) 
+
+# correct errors/add missing data in the old dataset
+# 1) the one dose estimate of Ivers et al, 2015 should be coded as yearid = 1 instead of 2
+df_FollowupPeriod <- df_FollowupPeriod |>
+  # 1) the one dose estimate of Ivers et al, 2015 should be coded as yearid=1 instead of 2
+  mutate(yearid = ifelse(Paper == "Ivers et al, 2015" & Dose == 1, 2, yearid)) |>
+  # 2) add VE.u manually for van Loon et al, 1996
+  mutate(VE.u = ifelse(is.na(VE.u), 1 - exp(yi + 1.96*se), VE.u)) %>%
+  filter(Paper != "Matias et al, 2023b") # only based on 4 cases, low power, filtered out
+
+
+#####################################
+# make df_main (old + new)
+#####################################
+# This datset includes the cumulative VE estimates as well as age stratified estimates directly pulled from literature.
+df_main <- df_new |>
+  mutate(Vaccine = "WC") |>
+  dplyr::rename(StudyDesign = study_type, Doses = Dose, age.class = age_class,
+                Notes1 = note1, Notes2= note2, Duration.months = duration_months) |> 
+  # include main studies only
+  filter(included_main == 1) |> 
+  mutate(new.old = "new") |>
+  dplyr::select(new.old, Paper, Location, Mean.VE, VE.l, VE.u, Vaccine, Duration.months, StudyDesign, Doses, age.class, Notes1, Notes2) |>
+  rbind(df_old_main |> 
+          dplyr::rename(Paper = Author..Year) |> dplyr::select(-location) |>
+          mutate(new.old = "old", Notes2 = NA) |>
+          rename(Notes1 = Notes))  |>
+  mutate(StudyID = ifelse(str_sub(Paper, -1) %in% c(0:9) == FALSE, str_sub(Paper, end = -2), Paper)) %>%
+  filter(Paper != "Matias et al, 2023b") # only based on 4 cases, low power, filtered out
+
+
+# (added on 5.1.23)
+# correct one data entry mistake from the previous review's data
+df_main <- df_main |>
+  mutate(Mean.VE = case_when(Paper == "Qadri et al, 2015" & age.class == 2 ~ 0.33,
+                             TRUE ~ Mean.VE),
+         VE.l = case_when(Paper == "Qadri et al, 2015" & age.class == 2 ~ -0.94,
+                           TRUE ~ VE.l),
+         VE.u = case_when(Paper == "Qadri et al, 2015" & age.class == 2 ~ 0.77,
+                          TRUE ~ VE.u)) |>
+  mutate(Location = ifelse(Location == "COD", "DRC", Location))
+
+
+# calculate standard errors
+df_main <- df_main |>
+  mutate(se = ifelse(is.na(VE.u),
+                     (log(1 - Mean.VE) - log(1 - VE.l)) / qnorm(0.95),
+                     (log(1 - VE.l) - log(1 - VE.u)) / (2*qnorm(.975))),
+         yi = log(1 - Mean.VE)) |> arrange(desc(StudyDesign), desc(Duration.months))
+azman_id <- which(df_main$Paper == "Azman et al, 2016")
+df_main[azman_id,'se'] <-  (log(1 - df_main[azman_id,'Mean.VE']) - log(1 - df_main[azman_id,'VE.l']))/(2*qnorm(.975))*2 # code used by Qifang in the previous review
+
+#####################################
+# subset df_main dataset by age group
+#####################################
+df <- df_main |> filter(age.class == 0) # VE for age >=1
+df.u5a <- df_main |> filter(age.class == 1) # VE for age 1-5
+df.o5a <- df_main |> filter(age.class == 2 | age.class == 3 | age.class == 4)  # VE for age >=5 (contains VE estimates for 1-5, 5-15 and 5+)
+
+# WC + wc-rBS studies (not useful anymore as we only include WC estimate in the final analysis/paper)
+df.bothvaxtypes <- df
+df.u5a.bothvaxtypes <- df.u5a
+df.o5a.bothvaxtypes <- df.o5a
+df_FollowupPeriod_bothvaxtypes <- df_FollowupPeriod
+
+# WC only studies
+df <- df |> filter(Vaccine == "WC")
+df.u5a <- df.u5a |> filter(Vaccine == "WC")
+df.o5a <- df.o5a |> filter(Vaccine == "WC")
+df_FollowupPeriod <- df_FollowupPeriod |> 
+  filter(vaccine_class == "WC") |> 
+  mutate(mid_time = TL + (TR - TL)/2)
+```
+
+
+<br>
+
+### **Table `r tab.counter`.** Description of efficacy studies
+```{r Description of efficacy studies}
+tab.counter <- tab.counter + 1
+tab_efficacy_studies <- 
+  efficacy_studies |>
+  dplyr::select(10, 1:9) |>
+  flextable() |>
+  width(j = 2, width = 1) |> width(j = 3:6, width = 3)
+
+tab_efficacy_studies
+
+save_as_docx(tab_efficacy_studies, path = here("tables/tab_efficacy_studies.docx"))
+```
+
+<br>
+
+### Risk of bias figure of RCTs
+
+```{r, fig.width = 15, fig.height = 13}
+# read in the Risk of bias assessment table for RCTs
+df.rob <- read.csv(here("data/QA_RCT_resolved.csv"), skip = 1) %>% dplyr::select(-title, -URLs)
+study_labels <- c(paste(df.rob$Studies[1:3], collapse = ", "),
+                  paste(df.rob$Studies[4:8], collapse = ", "),
+                  paste(df.rob$Studies[9:10], collapse = ", "),
+                  paste(df.rob$Studies[11:12], collapse = ", "),
+                  df.rob$Studies[13])
+
+df.rob <- df.rob %>% filter(Study.site != "") 
+df.rob$Studies <- study_labels
+df.rob <- df.rob %>%
+  mutate(Studies = paste0(Studies, " (", Study.site, ")"))  %>% dplyr::select(-Study.site)
+colnames(df.rob)[2:7] <- paste0("item", 1:6)
+
+# # remove pre-Shancel vaccine studies 
+# df.rob <- df.rob[c(1,3,4),]
+# # wrap study names 
+# df.rob$Studies <- c(
+#   "Sur 2009\nSur 2011\nBhattacharya 2013\n(Kolkata \nIndia)",
+#   "Qadri 2015\nAli 2021\n(Dhaka\nBangladesh)",
+#   "Qadri 2016 \n Qadri 2018 \n (Dhaka,\n Bangladesh)"
+# )
+
+
+plt.rob <- 
+  df.rob %>% 
+  pivot_longer(cols = 2:7, names_to = "item", values_to = "score") %>%
+  mutate(rob_label = case_when(score == "low risk of bias" ~ "+",
+                               score == "unclear risk of bias" ~ "?",
+                               score == "high risk of bias" ~ "-")) %>%
+  mutate(item = case_when(item == "item1" ~ "Random sequence generation (selection bias)",
+                          item == "item2" ~ "Allocation concealment (selection bias)",
+                          item == "item3" ~ "Blinding of participants and personnel (performance bias)",
+                          item == "item4" ~ "Blinding of outcome assessment (detection bias)",
+                          item == "item5" ~ "Incomplete outcome data addressed (attrition bias)",
+                          item == "item6" ~ "Selective reporting (reporting bias)")) %>%
+  mutate(item = factor(item, levels = c("Random sequence generation (selection bias)",
+                                        "Allocation concealment (selection bias)",
+                                        "Blinding of participants and personnel (performance bias)",
+                                        "Blinding of outcome assessment (detection bias)",
+                                        "Incomplete outcome data addressed (attrition bias)",
+                                        "Selective reporting (reporting bias)"))) %>%
+  ggplot() +
+  geom_tile(aes(x = item, y = Studies, fill = score), color = "white", size = 10) +
+  geom_text(aes(x = item, y = Studies, label = rob_label), color = "black", size = 20) +
+  scale_fill_manual(values = c("low risk of bias" = "forestgreen", 
+                                 "unclear risk of bias" = "gold",
+                                 "high risk of bias" = "red")) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), 
+        axis.text=element_text(size=20),
+        axis.ticks.x=element_blank(), 
+        axis.ticks.y=element_blank(),
+        axis.title=element_blank()) +
+  scale_x_discrete(labels = wrap_format(30)) +
+  scale_y_discrete(labels = wrap_format(30))
+
+plt.rob
+
+# ggsave(plt.rob, filename = here("figures/updated_2023SR_figures/rob_RCT.jpg"), height = 13, width = 15)
+```
+
+### Here, remove studies using pre-Shanchol vaccines:
+  * Trach et al, 1997
+  * Clemens et al
+  * van Loon et al
+
+```{r}
+# remove pre-shanchol vaccines 
+df_FollowupPeriod <- df_FollowupPeriod %>%
+  filter(str_detect(Paper, "van Loon") == FALSE & str_detect(Paper, "Clemens") == FALSE & 
+           str_detect(Paper, "Trach") == FALSE)
+```
+
+
+
+<br>
+
+### **Table `r tab.counter`.** Description of effectiveness studies
+```{r Description of effectiveness studies}
+tab.counter <- tab.counter + 1
+tab_effectiveness_studies <- 
+  effectiveness_studies |>
+  dplyr::select(10, 1:9) |>
+  flextable() |>
+  width(j = 2, width = 1) |> width(j = 3:6, width = 3)
+
+tab_effectiveness_studies
+
+save_as_docx(tab_effectiveness_studies, path = here("tables/tab_effectiveness_studies.docx"))
+
+```
+
+<br>
+
+### **Figure `r fig.counter`.** PRISMA flow chart (new search with records between 1.1.2016 ~ 1.22.2023)
+```{r}
+fig.counter <- fig.counter + 1
+knitr::include_graphics(here("figures/updated_2023SR_figures/PRISMA_2023_updated_VE_SR_new_records_only.png"))
+```
+
+<br>
+
+### **Figure `r fig.counter`.** PRISMA flow chart (combining new search results and the records in 2017 review)
+```{r}
+fig.counter <- fig.counter + 1
+knitr::include_graphics(here("figures/updated_2023SR_figures/PRISMA_two_reviews_combined.png"))
+```
+
+<br>
+
+### **Table `r tab.counter`.** Number of data points included in the main analysis.
+(One study usually contains more than 1 data points for different age groups.)
+```{r}
+tab.counter <- tab.counter + 1
+
+df |> group_by(Vaccine, StudyDesign, Doses) |> count() |> mutate(age = "Unstratified (all ages)") |>
+  rbind(df.u5a |> group_by(Vaccine, StudyDesign, Doses) |> count() |> mutate(age = "Under 5 yo")) |>
+  rbind(df.o5a |> group_by(Vaccine, StudyDesign, Doses) |> count() |> mutate(age = "Over 5 yo")) |>
+  dplyr::select(StudyDesign, age, Doses, n) |> arrange(StudyDesign, desc(age), Doses) |>
+  flextable() |>
+  #merge_at(j = 1, i = 1:6) |> merge_at(j = 1, i = 7:12) |>
+  #merge_at(j = 2, i = c(1:2)) |>
+  merge_v(j = 1:2) |>
+  width(j = 2:3, width = 2) |>
+  hline(part = "body") |>
+  vline()
+
+```
+
+<br>
+
+### VE over time.
+
+### **Table `r tab.counter`.** Number of data points included in the Follow-up period analysis (VE over time)
+```{r}
+tab.counter <- tab.counter + 1
+
+df_FollowupPeriod |>
+  filter(!is.na(yearid)) |>
+  group_by(StudyType, Dose, yearid) |> count() |> 
+  mutate(yearid = case_when(yearid == 1 ~ "0-12m",
+                            yearid == 2 ~ "12-24m",
+                            yearid == 3 ~ "24-36m",
+                            yearid == 4 ~ "36-48m",
+                            yearid == 5 ~ "48-60m")) |>
+  flextable() |>
+  merge_v(j = 1:2) |>
+  width(j = 1:2, width = 2) |>
+  hline(part = "body")  |>
+  vline()
+```
+
+<br>
+
+### **Figure `r fig.counter`.** VE over time (One-Dose efficacy/Effectiveness)
+For one-dose estimate, we combined the efficacy and effectiveness estimates into one figure as there are so few efficacy estimates available (only two estimates). The two efficacy estimates are in grey color, represented by a round point instead of a square point.
+```{r, fig.width = 9, fig.height=4}
+fig.counter <- fig.counter + 1
+make_fp_ve_1dose_6m(fpdata = df_FollowupPeriod)
+
+#jpeg(here("figures/updated_2023SR_figures/make_fp_ve_1dose_6m.jpeg", width = 600, height = 300))
+pdf("../figures/updated_2023SR_figures/make_fp_ve_1dose_6m.pdf", width = 9, height = 4.5)
+#jpeg("../figures/updated_2023SR_figures/make_fp_ve_1dose_6m.jpeg", width = 800, height = 400)
+
+make_fp_ve_1dose_6m(fpdata = df_FollowupPeriod)
+```
+
+### **Table `r tab.counter`.** Studies included in the above figure (1-dose VE by time)
+```{r}
+tab.counter <- tab.counter + 1
+# studies included in the above figure
+tab_studies_1d <- 
+  df_FollowupPeriod |>
+  arrange((yearid)) |>
+    filter(Dose==1) |>
+    filter(yearid!=0) |> 
+    # group by every 6 months
+    mutate(TM = (TL + TR)/2) |>
+    mutate(monthid = case_when(TM > 0 & TM <= 6 ~ 1,
+                               TM > 6 & TM <= 12 ~ 2,
+                               TM > 12 & TM <= 18 ~ 3,
+                               TM > 18 & TM <= 24 ~ 4,
+                               TM > 24 & TM <= 30 ~ 5)) |>
+    group_by(monthid) |>
+    arrange(StudyType, .by_group = TRUE) |>
+  ungroup() |>
+  mutate(time_range = paste0("[", TL, ", ", TR, "]")) |>
+  mutate(Mean.VE = round(Mean.VE*100), VE.l = round(VE.l* 100), VE.u = round(VE.u*100)) |>
+  mutate(VE = paste0(Mean.VE, " (", VE.l, "-", VE.u, ")")) |>
+  dplyr::select(monthid, StudyID, StudyType, Location, time_range, new.old, VE) |>
+  # reactable(style = list(color = "black", `font-family` = "Georgia", `font-size` = "12px"), defaultPageSize = 20)
+  # remove one duplicate estimate
+  filter(StudyID != "Qadri et al, 2016") |>
+  flextable() |>
+  merge_at(j = 1, i = 1:5) |>
+  merge_at(j = 1, i = 6:7) |>
+  merge_at(j= 1, i = 8:11) |>
+  merge_at(j = 1, i = 13:14) |>
+  vline(j = 1) |>
+  hline(i = c(5,7, 11,12)) |>
+  width(j = 2, width = 2.5) |>
+  width(j = 4, width = 2) |>
+  width(j = 7, width = 2)
+
+tab_studies_1d
+
+save_as_docx(tab_studies_1d, path = here("tables/tab_studies_1d.docx"))
+```
+
+<br>
+
+### **Figure `r fig.counter`.** VE over time (Two-Dose)
+```{r, fig.width = 9, fig.height = 8}
+fig.counter <- fig.counter + 1
+make_fp_ve_2dose(fpdata = df_FollowupPeriod) 
+
+# save the plot
+pdf("../figures/updated_2023SR_figures/make_fp_ve_2dose.pdf", width = 9, height = 9)
+#jpeg("../figures/updated_2023SR_figures/make_fp_ve_2dose.jpeg", width = 600, height = 600)
+#jpeg(here("figures/updated_2023SR_figures/make_fp_ve_2dose.jpeg", width = 600, height = 600))
+make_fp_ve_2dose(fpdata = df_FollowupPeriod) 
+```
+
+### **Table `r tab.counter`.** Studies included in the above figure (2-dose VE by time)
+```{r}
+tab.counter <- tab.counter + 1
+# studies included in the above figure
+tab_studies_2d <-
+  df_FollowupPeriod |> 
+  arrange((yearid)) |>
+    filter(Dose==2) |>
+    filter(yearid!=0) |> 
+    arrange(desc(StudyType)) |>
+  ungroup() |>
+  mutate(time_range = paste0("[", TL, ", ", TR, "]")) |>
+  mutate(Mean.VE = round(Mean.VE*100), VE.l = round(VE.l* 100), VE.u = round(VE.u*100)) |>
+  mutate(VE = paste0(Mean.VE, " (", VE.l, "-", VE.u, ")")) |>
+  dplyr::select(StudyType, yearid, StudyID,Location, time_range,new.old, VE) |>
+  # reactable(groupBy = "StudyType", 
+  #           style = list(color = "black", `font-family` = "Georgia", `font-size` = "12px"), 
+  #           defaultPageSize = 20, defaultExpanded = TRUE)
+  flextable() |>
+  width(j = 3, width = 2.5) |>
+  width(j = 7, width = 2) |>
+  merge_at(j = 1, i = 1:16) |>
+  merge_at(j = 1, i = 17:26) |>
+  merge_at(j = 2, i = 1:5) |>
+  merge_at(j = 2, i = 6:9) |>
+  merge_at(j = 2, i = 10:12) |>
+  merge_at(j = 2, i = 13:15) |>
+  merge_at(j = 2, i = 17:21) |>
+  merge_at(j = 2, i = 22:23) |>
+  merge_at(j = 2, i = 24:25) |>
+  vline(j = 1:2) |>
+  hline(i = c(5, 9, 12, 15,16, 21,23,25))
+
+tab_studies_2d
+
+save_as_docx(tab_studies_2d, path = here("tables/tab_studies_2d.docx"))
+
+# Note: 
+# * 1) Bhattacharya et al. has an extended follow-up period than Sur et al. (the same trial in India)
+# * 2) van Loon et al. has extended follow-up period than Clemens et al. (the trial in Dhaka)
+
+```
+
+<br>
+
+### **Figure `r fig.counter`.** 4-Panel figure for OCV estimates
+```{r, fig.width = 13, fig.height=8}
+fig.counter <- fig.counter + 1
+make_fp_ve_4panels(fpdata = df_FollowupPeriod) 
+
+# save the plot
+pdf("../figures/updated_2023SR_figures/make_fp_ve_4panels.pdf", width = 13, height = 7)
+#jpeg(here("figures/updated_2023SR_figures/make_fp_ve_4panels.jpeg", width = 1000, height = 600))
+#pdf(here("figures/updated_2023SR_figures/make_fp_ve_4panels.jpeg", width = 13, height = 7))
+make_fp_ve_4panels(fpdata = df_FollowupPeriod) 
+```
+
+### **Figure `r fig.counter`.** 4-Panel figure for OCV estimates (colored by vaccine product)
+
+```{r, fig.width = 13, fig.height=8}
+fig.counter <- fig.counter + 1
+
+make_fp_ve_4panels_colored(fpdata = df_FollowupPeriod) 
+
+# save the plot
+pdf("../figures/updated_2023SR_figures/make_fp_ve_4panels_colored.pdf", width = 13, height = 7)
+#jpeg(here("figures/updated_2023SR_figures/make_fp_ve_4panels.jpeg", width = 1000, height = 600))
+#pdf(here("figures/updated_2023SR_figures/make_fp_ve_4panels.jpeg", width = 13, height = 7))
+make_fp_ve_4panels_colored(fpdata = df_FollowupPeriod) 
+```
+
+
+
+<br>
+
+## Meta-regression
+
+### 2-dose meta-regression
+```{r}
+tau_estim_method <- "EB"
+df.mr.2d.obs <- df_FollowupPeriod |> filter(!is.na(yearid)) |>
+  filter(Dose == 2, StudyType == "Effectiveness")
+df.mr.2d.rct <- df_FollowupPeriod |> filter(!is.na(yearid)) |>
+  filter(Dose == 2, StudyType == "Efficacy")
+
+# to distinguish data ID and study ID, rename column:
+df.mr.2d.obs <- df.mr.2d.obs |> rename(DataID = Paper) |> mutate(var = se*se) %>%
+  mutate(log_mid_time=log(mid_time),sqrt_mid_time=sqrt(mid_time))
+df.mr.2d.rct <- df.mr.2d.rct |> rename(DataID = Paper) |> mutate(var = se*se) %>%
+  mutate(log_mid_time=log(mid_time),sqrt_mid_time=sqrt(mid_time))
+
+
+### remove the duplicate estimates from the same trial 
+# df.mr.2d.rct <- df.mr.2d.rct %>% filter(DataID != "Qadri et al, 2015")
+
+# save the dataset to use in OCV_SR_metaregression.rmd 
+# saveRDS(df.mr.2d.obs, "../data/df.mr.2d.obs.rds")
+# saveRDS(df.mr.2d.rct, "../data/df.mr.2d.rct.rds")
+```
+
+<br>
+
+#### First, take a look at the dataset of 2-dose effectiveness
+```{r}
+df.mr.2d.obs %>%
+  reactable( style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+####  take a look at the dataset of 2-dose efficacy
+```{r}
+df.mr.2d.rct %>%
+  reactable( style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+#### Based on the model comparison for 2-dose meta-regression in **metaregression.html**, 
+  * Use model 2 (log_mid_time as covariate, "REML" as method) for meta-regression of 2-dose effectiveness estimates;
+  * Use model 1 (mid_time as covariate, "ML" as method) for meta-regression of 2-dose efficacy estimates;
+  
+```{r}
+# if remove the pre-shanchol vaccines (for sensitive analysis)
+df.mr.2d.rct <- df.mr.2d.rct %>%
+  filter(DataID %in% c("Trach et al, 1997",
+                       "van Loon et al, 1996a") == FALSE)
+
+log.2d.obs <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML",       # REML
+                     mods = ~ log_mid_time, # use log mid time as covariate 
+                     random = ~ 1 | StudyID,
+                     data = df.mr.2d.obs)
+
+log.2d.rct <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID,
+                     method = "REML",      # ML 
+                     mods = ~ mid_time,  # use mid time as covariate
+                     random = ~ 1 | StudyID,
+                     data = df.mr.2d.rct)
+
+# get beta parameters
+beta.2d.obs <- c(log.2d.obs$beta)
+beta.2d.rct <- c(log.2d.rct$beta)
+
+
+```
+
+# get the predictions for each year
+
+```{r}
+# get the predictions for each year
+pred.2d.obs <- predict(log.2d.obs, newmods=log(c(1,2,3,4,5,6)*12), transf=function(x) 1-exp(x), addx=TRUE)
+pred.2d.rct <- predict(log.2d.rct, newmods=c(1,2,3,4,5,6)*12, transf=function(x) 1-exp(x), addx=TRUE)
+
+
+pred.est.2d.byyear <- 
+  pred.2d.obs |>
+  as.data.frame() |> 
+  rename(obs.median = pred, obs.lb = ci.lb, obs.ub = ci.ub) |> # here is only confidence interval 
+  mutate(year = 1:6) |> dplyr::select(year, obs.median, obs.lb, obs.ub) |>
+  cbind(
+    pred.2d.rct |> as.data.frame() |> 
+      rename(rct.median = pred, rct.lb = ci.lb, rct.ub = ci.ub) |>
+      dplyr::select(rct.median, rct.lb, rct.ub)
+  ) |>
+  mutate(obs.median = 100*obs.median, obs.lb = 100*obs.lb, obs.ub = 100*obs.ub,
+         rct.median = 100*rct.median, rct.lb = 100*rct.lb, rct.ub = 100*rct.ub)
+
+pred.est.2d.byyear %>% mutate(across(obs.median:rct.ub, ~ round(., 1))) %>% reactable( style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+<br>
+
+### **Figure `r fig.counter`.** Plot 2-dose VE (predictions) over time
+Each grey line represents an estimate from a study, start of the line is the start of the follow up time and end of the line is the end of the follow up time.
+(For model functions, please see table 5 above.)
+
+```{r fig.width=12, fig.height=6}
+fig.counter <- fig.counter + 1
+
+# get the predictions at more detailed time scale
+pred.2d.rct <- predict(log.2d.rct, newmods=seq(0.001, 5, 0.001)*12, transf=function(x) 1-exp(x), addx=TRUE)
+pred.2d.obs <- predict(log.2d.obs, newmods=log(seq(0.001, 5, 0.001)*12), transf=function(x) 1-exp(x), addx=TRUE)
+
+
+pred.est.2d <- 
+  pred.2d.obs |>
+  as.data.frame() |> 
+  rename(obs.median = pred, obs.ci.lb = ci.lb, obs.ci.ub = ci.ub,
+                            obs.pi.lb = pi.lb, obs.pi.ub = pi.ub) |>
+  mutate(month = seq(0.001,5, 0.001)*12) |> dplyr::select(month, obs.median, obs.ci.lb, obs.ci.ub, obs.pi.lb, obs.pi.ub) |>
+  cbind(
+    pred.2d.rct |> as.data.frame() |> 
+      rename(rct.median = pred, rct.ci.lb = ci.lb, rct.ci.ub = ci.ub,
+                                rct.pi.lb = pi.lb, rct.pi.ub = pi.ub) |>
+      dplyr::select(rct.median, rct.ci.lb, rct.ci.ub, rct.pi.lb, rct.pi.ub)
+  ) |>
+  mutate(across(obs.median:rct.pi.ub, ~ . * 100))
+  
+
+pred.2d.overlay <- pred.est.2d
+
+# plot VE
+waning.ve.2dose <- 
+  pred.est.2d |> 
+  dplyr::select(month, obs.median, obs.ci.lb, obs.ci.ub, obs.pi.lb, obs.pi.ub) |>
+  rename(median = obs.median, ci.lb = obs.ci.lb, ci.ub = obs.ci.ub,
+                              pi.lb = obs.pi.lb, pi.ub = obs.pi.ub) |>
+  mutate(type = "Effectiveness") |>
+  rbind(
+    pred.est.2d |> 
+    dplyr::select(month, rct.median, rct.ci.lb, rct.ci.ub, rct.pi.lb, rct.pi.ub) |>
+    rename(median = rct.median, ci.lb = rct.ci.lb, ci.ub = rct.ci.ub,
+                                pi.lb = rct.pi.lb, pi.ub = rct.pi.ub) |>
+    mutate(type = "Efficacy") 
+  ) 
+
+```
+
+
+```{r, fig.width=10, fig.height=5}
+# effectiveness 
+plt.2dose.obs <-
+  make_base_waning_plot(df.plt = df.mr.2d.obs, est.type = "Effectiveness") +
+  geom_line(aes(x = month, y = (1-exp(log.2d.obs$beta[1] + log.2d.obs$beta[2]*log(month)))*100),
+             data = waning.ve.2dose |> filter(type == "Effectiveness"),
+             color = "steelblue", linetype = "dashed") + 
+  geom_line(aes(x = month, y = (1-exp(log.2d.obs$beta[1] + log.2d.obs$beta[2]*log(month)))*100),
+             data = waning.ve.2dose |> filter(type == "Effectiveness") %>% filter(month <= 4*12),
+             color = "steelblue") +
+  geom_point(aes(x = month, 
+                 y = median),
+             data = waning.ve.2dose |> filter(type == "Effectiveness" & 
+                                                  month %in% (1:5*12)),
+             color = "steelblue") +
+  coord_cartesian(xlim = c(0,60), ylim = c(-20, 100)) +
+  # plot the CI (narrower)
+  geom_ribbon(aes(x = month, ymin = ci.lb, ymax = ci.ub),
+              data = waning.ve.2dose |> filter(type == "Effectiveness"),
+              alpha = 0.2, fill = "steelblue") +
+  # plot the PI
+  geom_ribbon(aes(x = month, ymin = pi.lb, ymax = pi.ub),
+              data = waning.ve.2dose |> filter(type == "Effectiveness"),
+              alpha = 0.2, fill = "steelblue") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(aes(x = month, y = median, 
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -4, nudge_x = -5, inherit.aes = FALSE,
+            data = waning.ve.2dose |> filter(type == "Effectiveness" & 
+                                                 month %in% (12*c(1,2,3,4,5))),
+            color = "steelblue") +
+  theme(legend.position="top") +
+  scale_x_continuous(breaks = c(12, 24, 36, 48, 60, 72), 
+                     labels = as.character(c(12, 24, 36, 48, 60, 72))
+                     #, expand = c(0,0)
+                     ) +
+    scale_y_continuous(breaks = c(-100, -50, 0,25, 50, 75, 100), 
+                       labels = as.character(c(-100, -50, 0, 25, 50, 75, 100))
+                       #,expand = c(0,0)
+                       )
+ 
+
+# Model 1 efficacy 
+plt.2dose.rct <-
+  make_base_waning_plot(df.plt = df.mr.2d.rct, est.type = "Efficacy") +
+  geom_line(aes(x = month, y = (1-exp(log.2d.rct$beta[1] + log.2d.rct$beta[2]*month))*100),
+             data = waning.ve.2dose |> filter(type == "Efficacy"),
+             color = "forestgreen") + 
+  geom_point(aes(x = month, 
+                 y = median),
+             data = waning.ve.2dose |> filter(type == "Efficacy" & 
+                                                  month %in% (12*c(1,2,3,4,5))),
+             color = "forestgreen") +
+  # plot CI
+  geom_ribbon(aes(x = month, ymin = ci.lb, ymax = ci.ub),
+              data = waning.ve.2dose |> filter(type == "Efficacy"),
+              alpha = 0.2, fill = "forestgreen") +
+  # plot PI 
+  geom_ribbon(aes(x = month, ymin = pi.lb, ymax = pi.ub),
+              data = waning.ve.2dose |> filter(type == "Efficacy"),
+              alpha = 0.2, fill = "forestgreen") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(aes(x = month, y = median, 
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -5, nudge_x = -3, inherit.aes = FALSE,
+            data = waning.ve.2dose |> filter(type == "Efficacy" & 
+                                                 month %in% (12*c(1,2,3,4,5))),
+            color = "forestgreen") +
+  theme(legend.position="top") +
+  coord_cartesian(xlim = c(0,60), ylim = c(-20, 100))
+
+
+plt.waning <- plot_grid(plt.2dose.rct, plt.2dose.obs,
+                        labels = c(" A. Efficacy of 2-dose OCV", 
+                                   "B. Effectiveness of 2-dose OCV"), nrow = 1,
+          label_size = 10, vjust = 1.1, hjust = -0.3)
+
+plt.waning
+
+# ggsave(plot = plt.waning, filename = here("figures/updated_2023SR_figures/plt_waning_2d.jpg"), height = 4.5, width = 10)
+
+#ggsave(plot = plt.waning, filename = "../figures/updated_2023SR_figures/plt_waning_2d.jpg", height = 4.5, width = 10)
+```
+
+
+###  Make panel plot with both estimates and meta-regression curves in one figure (2-dose)
+(Main analysis)
+```{r, fig.width = 11, fig.height=8}
+source("../source/panelPlot_colored.R")
+
+pdf("../figures/updated_2023SR_figures/2dose_panelPlot_colored.pdf", width = 11, height = 8)
+draw_2dose_panelPlot_colored(fpdata = df_FollowupPeriod)
+```
+
+
+### Make panel plot with both estimates and meta-regression curves in one figure (2-dose)
+(sensitive analysis removing pre-shanchol vaccines) 
+```{r, fig.width = 11, fig.height=8}
+source("../source/panelPlot_colored.R")
+
+pdf("../figures/updated_2023SR_figures/2dose_panelPlot_colored_SSA.pdf", width = 12, height = 8)
+draw_2dose_panelPlot_colored_SSA(fpdata = df_FollowupPeriod)
+```
+
+
+<br>
+
+### 1-dose meta-regression
+
+#### First, take a look at the dataset of 1-dose effectiveness/efficacy
+```{r}
+tab.counter <- tab.counter + 1
+
+df.mr.1d.obs <- df_FollowupPeriod |> 
+  filter(!is.na(yearid)) |> 
+  filter(Dose == 1) |> rename(DataID = Paper) |> mutate(var = se*se) |>
+  filter(StudyType == "Effectiveness") %>% 
+  mutate(log_mid_time=log(mid_time),
+         sqrt_mid_time=sqrt(mid_time)) %>%
+  mutate(log_mid_time_plusone = log(mid_time + 1))
+
+# save this dataset to be used in OCV_SR_metaregression.rmd 
+# saveRDS(df.mr.1d.obs, "../data/df.mr.1d.obs.rds")
+
+df.mr.1d.obs %>%
+  reactable( style = list(color = "black", `font-family` = "Georgia", `font-size` = "15px"))
+```
+
+#### Similar to model comparison of 2-dose models in metaregression.html, also compare the 1-dose models here.
+
+```{r}
+# model 1 simple meta-regression 
+model_1d_1 <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ mid_time,
+                     random = ~ 1 | StudyID,
+                     data = df.mr.1d.obs)
+
+# model 2 logging the covariate
+# logging this will generate two 0s as there are two studies with 1 month.
+model_1d_2 <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ log_mid_time, 
+                     random = ~ 1 | StudyID,
+                     data = df.mr.1d.obs )
+
+# model 2 logging (mid_month + 1)
+model_1d_2a <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ log_mid_time_plusone, 
+                     random = ~ 1 | StudyID,
+                     data = df.mr.1d.obs )
+
+# model 2 logging the covariate
+model_1d_2b <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ sqrt_mid_time,
+                     random = ~ 1 | StudyID,
+                     data = df.mr.1d.obs )
+
+# model 3, non-logged mid_time but random slopes
+model_1d_3 <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ mid_time,
+                     random = ~ 1 + StudyID | StudyID,
+                     data = df.mr.1d.obs)
+
+# model 4, logged mid_time with random slopes
+model_1d_4 <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ log_mid_time,
+                     random = ~ 1 + StudyID | StudyID,
+                     data = df.mr.1d.obs)
+
+
+bind_rows(
+  model_1d_1$fit.stats |> mutate(model="model_1d_1",stat=rownames(model_1d_1$fit.stats)),
+  model_1d_2$fit.stats |> mutate(model="model_1d_2",stat=rownames(model_1d_2$fit.stats)),
+  model_1d_2a$fit.stats |> mutate(model="model_1d_2a",stat=rownames(model_1d_2a$fit.stats)),
+  model_1d_2b$fit.stats |> mutate(model="model_1d_2b",stat=rownames(model_1d_2b$fit.stats)),
+  model_1d_3$fit.stats |> mutate(model="model_1d_3",stat=rownames(model_1d_3$fit.stats)),
+  model_1d_4$fit.stats |> mutate(model="model_1d_4",stat=rownames(model_1d_4$fit.stats))) |> 
+  as_tibble() |> 
+  pivot_longer(cols=ML:REML,names_to="method") |>
+  ggplot(aes(x=model,y=value,group=method,col=model,pch=method)) + 
+  geom_point() + 
+  facet_grid(~stat,scales = "free_y") 
+
+```
+
+#### model 2 (with log mid month as covariate) seems to be the best model for 1-dose effectiveness
+
+```{r}
+# in all the following models, the pi and ci are exactly the same, based on the explanations in this webpage:
+# https://www.metafor-project.org/doku.php/faq
+# this is because in this dataset, tau^2 (estimated amount of heterogeneity) is 0, so the pi and ci are the same.
+
+predictions <- 
+  bind_rows(
+    predict(model_1d_1,
+            newmods=c(1,2,3,4,5,6)*12,
+            transf=function(x) 1-exp(x), addx=TRUE) |> data.frame() |> mutate(model="model_1d_1"),
+    predict(model_1d_2,
+            newmods=log(c(1,2,3,4,5,6)*12),
+            transf=function(x) 1-exp(x), addx=TRUE) |> data.frame() |> mutate(model="model_1d_2"),
+    predict(model_1d_2b,
+            newmods=sqrt(c(1,2,3,4,5,6)*12),
+            transf=function(x) 1-exp(x), addx=TRUE) |> data.frame() |> mutate(model="model_1d_2b"),
+    predict(model_1d_3, 
+            newmods=c(1,2,3,4,5,6)*12,
+            transf=function(x) 1-exp(x), addx=TRUE) |> data.frame() |> mutate(model="model_1d_3"),
+    predict(model_1d_4, 
+            newmods=log(c(1,2,3,4,5,6)*12),
+            transf=function(x) 1-exp(x), addx=TRUE) |> data.frame() |> mutate(model="model_1d_4")) |>
+  mutate(time=case_when(
+    is.na(X.mid_time) & is.na(X.sqrt_mid_time) ~ exp(X.log_mid_time),
+    is.na(X.mid_time) & is.na(X.log_mid_time) ~ X.sqrt_mid_time^2,
+    TRUE ~ X.mid_time))
+
+predictions |> ggplot(aes(x=time,y=pred)) +
+  geom_line() + 
+  geom_ribbon(aes(ymin=ci.lb,ymax=ci.ub),alpha=0.2) +
+  geom_ribbon(aes(ymin=pi.lb,ymax=pi.ub),alpha=0.2) +
+  facet_wrap(~model,scales = "free_y") 
+```
+
+```{r}
+# fit the basic model using rma.mv, considering the random effect for each study
+log.1d <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML", 
+                     mods = ~ log_mid_time,
+                     random = ~ 1 | StudyID,
+                     data = df.mr.1d.obs)
+
+# get beta parameters
+beta.1d <- c(log.1d$beta)
+
+df.new <- expand.grid(
+  mid_time = log(seq(0.001, 60, 0.001))
+) |> as.matrix()
+
+# get the predictions for each year
+pred.1d <- predict(log.1d, newmods=df.new, transf=function(x) 1-exp(x), addx=TRUE
+                   ,pi.type="riley" # if using this, CI and PI will be different, if not using this, they are the same
+                   )
+
+pred.est.1d <- 
+  pred.1d |>
+  as.data.frame() |> 
+  rename(median = pred) |>
+  mutate(month_6m = c(seq(0.001, 60, 0.001))/6) |> 
+  dplyr::select(month_6m, median, ci.lb, ci.ub, pi.lb, pi.ub) |>
+  mutate(median = 100*median, ci.lb = 100*ci.lb, ci.ub = 100*ci.ub,
+                              pi.lb = 100*pi.lb, pi.ub = 100*pi.ub)
+
+pred.1d.overlay <- pred.est.1d
+
+# pred.est |>
+#   filter(month_6m %in% c(1,2,3,4,5)) |>
+#   mutate(median = round(median), lb = round(lb), ub = round(ub)) |>
+#   mutate(VE = paste0(median, " (", lb, "-", ub, ")")) |>
+#   dplyr::select(-median, -lb, -ub) |>
+#   mutate(month_6m = month_6m * 6) |>
+#   rename(month = month_6m) |>
+#   flextable() |>
+#   width(j =1:2, width = 1.5)
+```
+
+
+### **Figure `r fig.counter`.**  Plot 1-dose VE (predictions) over time
+```{r fig.width = 5, fig.height = 4}
+fig.counter <- fig.counter + 1
+
+# plot effectiveness for one dose with both PI an CI
+plt.1d <-
+   ggplot() +
+    geom_segment(aes(x = TL, xend = TR, y = Mean.VE*100, yend = Mean.VE*100), 
+                 data = df.mr.1d.obs, color = "grey") +
+    xlab("Months after vaccination") + ylab("Effectiveness (%)") +
+    scale_x_continuous(breaks = c(6, 12, 18, 24, 30, 36), 
+                       labels = as.character(c(6, 12, 18, 24, 30, 36))) +
+    scale_y_continuous(breaks = c(-100, -50, 0,25, 50, 75, 100), 
+                       labels = as.character(c(-100, -50, 0, 25, 50, 75, 100))) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  geom_line(aes(x = month_6m*6, y = (1-exp(log.1d$beta[1] + log.1d$beta[2] * log(month_6m *6)))*100),
+             data = pred.est.1d |> filter(month_6m <= 6.2),
+             color = "steelblue") + 
+  geom_point(aes(x = month_6m*6, 
+                 y = median),
+             #data = pred.est |> filter(month_6m %in% c(1,2,3,4,5,6)),
+             data = pred.est.1d[6000*c(1,2,3,4,5,6),],
+             color = "steelblue") +
+  # ribbon for CI
+  geom_ribbon(aes(x = month_6m*6, ymin = ci.lb, ymax = ci.ub),
+              data = pred.est.1d |> filter(month_6m <= 6.2),
+              alpha = 0.15, fill = "steelblue") +
+  # ribbon for PI (although in this case, CI and PI are the same)
+  geom_ribbon(aes(x = month_6m*6, ymin = pi.lb, ymax = pi.ub),
+              data = pred.est.1d |> filter(month_6m <= 6.2),
+              alpha = 0.15, fill = "steelblue") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_text(aes(x = month_6m*6, y = median, 
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -5, nudge_x = -3, inherit.aes = FALSE,
+            #data = pred.est |> filter(month_6m %in% c(1,2,3,4,5,6)),
+            data = pred.est.1d[6000*c(1,2,3,4,5,6),],
+            color = "steelblue") +
+  theme(legend.position = "top")  +
+  coord_cartesian(ylim = c(-20, 100), xlim = c(0,36)) 
+
+plt.1d
+# ggsave(plot = plt.1d,filename = here::here("figures/updated_2023SR_figures/plt_waning_1d.jpg"), height = 5, width = 5)
+
+# ggsave(plot = plt.1d,filename = "../figures/updated_2023SR_figures/plt_waning_1d.jpg", height = 5, width = 5)
+```
+
+<br>
+
+
+### Panel plot with included estimates and meta regression curve (1-dose)
+```{r, fig.width = 6, fig.height=8}
+source("../source/panelPlot_colored.R")
+
+pdf("../figures/updated_2023SR_figures/1dose_panelPlot_colored.pdf", width = 6, height = 8)
+draw_1dose_panelPlot_colored()
+```
+
+
+### Overlay the one-dose and two-dose waning effects on the same plot (as supplementary figure)
+
+```{r fig.width = 6, fig.height = 5}
+
+month_index <- pred.2d.overlay$month
+pred.1d.overlay <- pred.1d.overlay %>% mutate(month = month_6m*6) %>% filter(month %in% month_index)
+
+# only plotting the CI here
+plt.overlay <- 
+  ggplot() +
+  #two dose effect
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+         panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(legend.position="top")  +
+  geom_line(aes(x = month, y = obs.median), data = pred.2d.overlay, linetype = "dashed", color = "steelblue") +
+  geom_line(aes(x = month, y = obs.median, color = "Two doses"), data = pred.2d.overlay %>% filter(month <= 48)) +
+  geom_point(aes(x = month, y = obs.median), data = pred.2d.overlay %>% filter(month %in% c(12,24,36,48,60)), color = "steelblue") +
+  # only plotting CI here
+  geom_ribbon(aes(x = month, ymin = obs.ci.lb, ymax = obs.ci.ub), data = pred.2d.overlay, fill ="steelblue", alpha = 0.2) +
+  geom_ribbon(aes(x = month, ymin = obs.pi.lb, ymax = obs.pi.ub), data = pred.2d.overlay, fill ="steelblue", alpha = 0.2) +
+  geom_text(aes(x = month, y = obs.median,
+                label = as.character(paste0(round(obs.median), " [", round(obs.ci.lb), ",", round(obs.ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = 5, nudge_x = 3, inherit.aes = FALSE,
+            data = pred.2d.overlay %>% filter(month %in% c(12,24,36,48)), show.legend = F, color = "steelblue") +
+  # one dose effect
+  geom_line(aes(x = month, y = median), data = pred.1d.overlay, color = "chocolate", linetype = "dashed") +
+  geom_line(aes(x = month, y = median, color = "One dose"), data = pred.1d.overlay %>% filter(month <= 36)) +
+  geom_point(aes(x = month, y = median), data = pred.1d.overlay %>% filter(month %in% c(12,24,36)), color = "chocolate") +
+  geom_ribbon(aes(x = month, ymin = ci.lb, ymax = ci.ub), data = pred.1d.overlay, fill = "chocolate", alpha = 0.2) +
+  geom_ribbon(aes(x = month, ymin = pi.lb, ymax = pi.ub), data = pred.1d.overlay, fill = "chocolate", alpha = 0.2) +
+  geom_text(aes(x = month, y = median,
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -3.5, nudge_x = -3.8, inherit.aes = FALSE,
+            data = pred.1d.overlay %>% filter(month %in% c(12,24,36)), show.legend = F, color = "chocolate") +
+  # styling
+  coord_cartesian( ylim = c(-10,100)) +
+  expand_limits(x = 0, y = 0) +
+  scale_color_manual("Dose Number", values=c("One dose" = "chocolate", "Two doses" = "steelblue")) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Estimated OCV effectiveness (%)") +
+  xlab("Months after vaccination") +
+  scale_x_continuous(breaks=seq(0, 60, 12))
+  
+
+plt.overlay
+
+#ggsave(plot = plt.overlay, filename = here("figures/updated_2023SR_figures/plt_waning_1d2d.jpg"), height = 5, width = 5)
+# ggsave(plot = plt.overlay, filename = "../figures/updated_2023SR_figures/plt_waning_1d2d.jpg", height = 5, width = 6)
+  
+```
+
+
+<br>
+
+## Conduct leave-one-out meta-regression to evaluate the influence of each data point
+
+### 2-dose effectiveness/efficacy (leave-one-study-out MR)
+```{r}
+
+# leave1out meta regression for 2-dose observational studies
+id.2d.obs <- unique(df.mr.2d.obs$StudyID)
+id.2d.rct <- unique(df.mr.2d.rct$StudyID)
+
+for(i in 1:length(id.2d.obs)){
+  
+  id.temp <- id.2d.obs[i]
+  df.mr <- df.mr.2d.obs %>% filter(StudyID != id.temp)
+  
+  log.2d.obs.temp <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML",       # REML
+                     mods = ~ log_mid_time, # use log mid time as covariate 
+                     random = ~ 1 | StudyID,
+                     data = df.mr)
+  # get coefficient
+  beta.2d.obs.temp <- c(log.2d.obs.temp$beta)
+  # get predictions
+  pred.2d.obs.temp <- predict(log.2d.obs.temp, newmods=log(seq(0.001, 5, 0.001)*12), transf=function(x) 1-exp(x), addx=TRUE)
+
+  
+  pred.est.temp <- pred.2d.obs.temp |>
+    as.data.frame() |> 
+    rename(obs.median = pred, obs.ci.lb = ci.lb, obs.ci.ub = ci.ub,
+                               obs.pi.lb = pi.lb, obs.pi.ub = pi.ub) |>
+    mutate(month = seq(0.001,5, 0.001)*12) |> 
+    dplyr::select(month, obs.median, obs.ci.lb, obs.ci.ub, obs.pi.lb, obs.pi.ub) |>
+    mutate(across(obs.median:obs.pi.ub, ~ . * 100)) %>% 
+    mutate(leave1out.index = id.temp)
+  
+  if(i == 1){pred.est.2d.obs <- pred.est.temp}
+  if(i != 1){pred.est.2d.obs <- rbind(pred.est.2d.obs, pred.est.temp)}
+  
+}
+
+
+
+# leave1out meta regression for 2-dose efficacy studies
+for(i in 1:length(id.2d.rct)){
+  
+  id.temp <- id.2d.rct[i]
+  df.mr <- df.mr.2d.rct %>% filter(StudyID != id.temp)
+  
+  log.2d.rct.temp <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML",       # REML
+                     mods = ~ mid_time, # use log mid time as covariate 
+                     random = ~ 1 | StudyID,
+                     data = df.mr)
+  # get coefficient
+  beta.2d.rct.temp <- c(log.2d.rct.temp$beta)
+  # get predictions
+  pred.2d.rct.temp <- predict(log.2d.rct.temp, newmods=seq(0.001, 5, 0.001)*12, transf=function(x) 1-exp(x), addx=TRUE)
+
+  
+  pred.est.temp <- pred.2d.rct.temp |>
+    as.data.frame() |> 
+    rename(rct.median = pred, rct.ci.lb = ci.lb, rct.ci.ub = ci.ub,
+                              rct.pi.lb = pi.lb, rct.pi.ub = pi.ub) |>
+    mutate(month = seq(0.001,5, 0.001)*12) |> 
+    dplyr::select(month, rct.median, rct.ci.lb, rct.ci.ub, rct.pi.lb, rct.pi.ub) |>
+    mutate(across(rct.median:rct.pi.ub, ~ . * 100)) %>% 
+    mutate(leave1out.index = id.temp)
+  
+  if(i == 1){pred.est.2d.rct <- pred.est.temp}
+  if(i != 1){pred.est.2d.rct <- rbind(pred.est.2d.rct, pred.est.temp)}
+  
+}
+
+# # create names of each data row
+# study.index.2d.obs <- paste0(df.mr.2d.obs$StudyID, " (", df.mr.2d.obs$TL, "-", df.mr.2d.obs$TR, ")")
+# study.index.2d.rct <- paste0(df.mr.2d.rct$StudyID, " (", df.mr.2d.rct$TL, "-", df.mr.2d.rct$TR, ")")
+
+
+## combine estimates using the full dataset and leave-on-out estimates
+pred.est.2d.leave1out <- 
+  pred.est.2d %>% select(month, obs.median, obs.ci.lb, obs.ci.ub, obs.pi.lb, obs.pi.ub) %>% 
+  mutate(leave1out.index = "All studies included") %>% 
+  rbind(pred.est.2d.obs) %>% mutate(type = "Effectiveness") %>%
+  rename(median = obs.median,
+         ci.lb = obs.ci.lb, ci.ub = obs.ci.ub, 
+         pi.lb = obs.pi.lb, pi.ub = obs.pi.ub
+         ) %>%
+  rbind(
+    pred.est.2d %>% select(month, rct.median, rct.ci.lb, rct.ci.ub, rct.pi.lb, rct.pi.ub) %>% 
+      mutate(leave1out.index = "All studies included") %>% 
+      rbind(pred.est.2d.rct) %>% mutate(type = "Efficacy") %>%
+      rename(median = rct.median,
+             ci.lb = rct.ci.lb, ci.ub = rct.ci.ub, 
+             pi.lb = rct.pi.lb, pi.ub = rct.pi.ub)
+  )
+```
+
+```{r, fig.width=10, fig.height=7}
+# plot leave one out effectiveness estimates 
+plt.2dose.obs.leave1out <- 
+  make_base_waning_plot(df.plt = df.mr.2d.obs, est.type = "Effectiveness") +
+  coord_cartesian(xlim = c(0,60), 
+                  ylim = c(0, 100)
+                  ) +
+  # plot the CI for all leave1out estimates
+  geom_ribbon(aes(x = month, ymin = ci.lb, ymax = ci.ub, fill = leave1out.index),
+              data = pred.est.2d.leave1out |> filter(type == "Effectiveness"),
+              alpha = 0.07) +
+  # plot the median lines for all leave1out estimates 
+  geom_line(aes(x = month, y = median, color = leave1out.index),size = 1.1, alpha = 0.7,
+             data = pred.est.2d.leave1out |> filter(type == "Effectiveness") %>% filter(leave1out.index != "All studies included")) +
+  # plot the median line using full data
+  geom_line(aes(x = month, y = median, group = 1),
+             data =  pred.est.2d.leave1out |> filter(type == "Effectiveness" & leave1out.index == "All studies included" ),
+            size = 1, inherit.aes = F, 
+            linetype = "dashed") + 
+  geom_line(aes(x = month, y = median, group = 1),
+             data = pred.est.2d.leave1out |> filter(type == "Effectiveness" & leave1out.index == "All studies included") %>%
+              filter(month <= 4*12), inherit.aes = F, 
+            size = 1) +
+  # label the estimates using full dataset
+  geom_text(aes(x = month, y = median, 
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -4, nudge_x = -5, inherit.aes = FALSE,
+            data =pred.est.2d.leave1out  |> filter(type == "Effectiveness" & leave1out.index == "All studies included" &
+                                                 month %in% (12*c(1,2,3,4,5)))) +
+  # points using full dataset
+  geom_point(aes(x = month,  y = median),
+             data = pred.est.2d.leave1out |> filter(type == "Effectiveness" & leave1out.index == "All studies included" & month %in% (1:5*12)), size = 1.5,
+             inherit.aes = F) +
+  # other styling stuff
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme(legend.position="bottom",  legend.text=element_text(size=10)) +
+  scale_x_continuous(breaks = c(12, 24, 36, 48, 60, 72), 
+                     labels = as.character(c(12, 24, 36, 48, 60, 72))
+                     #, expand = c(0,0)
+                     ) +
+    scale_y_continuous(breaks = c(-100, -50, 0,25, 50, 75, 100), 
+                       labels = as.character(c(-100, -50, 0, 25, 50, 75, 100))
+                       #,expand = c(0,0)
+                       ) +
+  guides(fill = FALSE,
+         color=guide_legend(ncol = 2,byrow=TRUE, title.position = "top"))  +
+  labs(color = "Study removed in Leave-one-study-out analysis")
+
+
+
+# plot leave one out efficacy estimates 
+plt.2dose.rct.leave1out <- 
+  make_base_waning_plot(df.plt = df.mr.2d.rct, est.type = "Efficacy") +
+  coord_cartesian(xlim = c(0,60), 
+                  ylim = c(0, 100)
+                  ) +
+  # plot the CI for all leave1out estimates
+  geom_ribbon(aes(x = month, ymin = ci.lb, ymax = ci.ub, fill = leave1out.index),
+              data = pred.est.2d.leave1out |> filter(type == "Efficacy"),
+              alpha = 0.07) +
+  # plot the median lines for all leave1out estimates 
+  geom_line(aes(x = month, y = median, color = leave1out.index), size = 1.1,alpha = 0.7,
+             data = pred.est.2d.leave1out |> filter(type == "Efficacy") %>% filter(leave1out.index != "All studies included")) +
+  # plot the median line using full data
+  # geom_line(aes(x = month, y = median, group = 1),
+  #            data =  pred.est.2d.leave1out |> filter(type == "Efficacy" & leave1out.index == "All data included" ),
+  #           size = 1, inherit.aes = F, 
+  #           linetype = "dashed") + 
+  geom_line(aes(x = month, y = median, group = 1),
+             data = pred.est.2d.leave1out |> filter(type == "Efficacy" & leave1out.index == "All studies included"), inherit.aes = F, 
+            size = 1) +
+  # label the estimates using full dataset
+  geom_text(aes(x = month, y = median, 
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -4, nudge_x = -5, inherit.aes = FALSE,
+            data =pred.est.2d.leave1out  |> filter(type == "Efficacy" & leave1out.index == "All studies included" &
+                                                 month %in% (12*c(1,2,3,4,5)))) +
+  # points using full dataset
+  geom_point(aes(x = month,  y = median),
+             data = pred.est.2d.leave1out |> filter(type == "Efficacy" & leave1out.index == "All studies included" & month %in% (1:5*12)), size = 1.5,
+             inherit.aes = F) +
+  # other styling stuff
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme(legend.position="bottom", legend.text=element_text(size=10)) +
+  scale_x_continuous(breaks = c(12, 24, 36, 48, 60, 72), 
+                     labels = as.character(c(12, 24, 36, 48, 60, 72))
+                     #, expand = c(0,0)
+                     ) +
+    scale_y_continuous(breaks = c(-100, -50, 0,25, 50, 75, 100), 
+                       labels = as.character(c(-100, -50, 0, 25, 50, 75, 100))
+                       #,expand = c(0,0)
+                       ) +
+  guides(fill = FALSE, 
+         color =guide_legend(ncol = 1 ,byrow=TRUE, title.position = "top"))  +
+  labs(color = "Study removed in Leave-one-study-out analysis")
+  
+
+legend.obs <- cowplot::get_legend(plt.2dose.obs.leave1out)
+legend.rct <- cowplot::get_legend(plt.2dose.rct.leave1out)
+legend.combined <- plot_grid(legend.rct, legend.obs, nrow = 1)
+
+plt.waning.2d.leave1out <- plot_grid(plot_grid(plt.2dose.rct.leave1out + theme(legend.position = "none"), 
+                                            plt.2dose.obs.leave1out + theme(legend.position = "none"), 
+                                            labels = c(" A. Efficacy of 2-dose OCV", 
+                                                       "B. Effectiveness of 2-dose OCV"), nrow = 1,
+                                            label_size = 12, vjust = 1.1, hjust = -0.3),
+                                  legend.combined, 
+                                  nrow = 2,
+                                  rel_heights = c(0.4,0.2))
+
+plt.waning.2d.leave1out
+
+# ggsave(plot = plt.waning, filename = here("figures/updated_2023SR_figures/plt_waning_2d.jpg"), height = 4.5, width = 10)
+
+# ggsave(plot = plt.waning.2d.leave1out, filename = "../figures/updated_2023SR_figures/plt_waning_2d_leave1out.jpg", height = 7, width = 10)
+```
+
+<br>
+
+### 1-dose effectiveness (leave-out-one MR) 
+```{r fig.width = 7.5, fig.height = 5}
+id.1d.obs <- unique(df.mr.1d.obs$StudyID)
+
+# leave1out meta regression for 2-dose observational studies
+for(i in 1:length(id.1d.obs)){
+  
+  id.temp <- id.1d.obs[i]
+  df.mr <- df.mr.1d.obs %>% filter(StudyID != id.temp)
+  
+  log.1d.obs.temp <- rma.mv(yi = log(1 - Mean.VE), V = var, slab = StudyID, 
+                     method = "REML",       # REML
+                     mods = ~ log_mid_time, # use log mid time as covariate 
+                     random = ~ 1 | StudyID,
+                     data = df.mr)
+  # get coefficient
+  beta.1d.obs.temp <- c(log.1d.obs.temp$beta)
+  
+  df.new <- expand.grid(
+  mid_time = log(seq(0.001, 60, 0.001))
+) |> as.matrix()
+  
+  # get predictions
+  pred.1d.obs.temp <- predict(log.1d.obs.temp, newmods=df.new, transf=function(x) 1-exp(x), addx=TRUE)
+  
+  pred.est.temp <- pred.1d.obs.temp |>
+    as.data.frame() |> 
+    rename(median = pred) |>
+    mutate(month_6m = c(seq(0.001, 60, 0.001))/6) |> 
+    dplyr::select(month_6m, median, ci.lb, ci.ub, pi.lb, pi.ub) |>
+    mutate(across(median:pi.ub, ~ . * 100)) %>% 
+    mutate(leave1out.index = id.temp)
+  
+  if(i == 1){pred.est.1d.obs <- pred.est.temp}
+  if(i != 1){pred.est.1d.obs <- rbind(pred.est.1d.obs, pred.est.temp)}
+  
+}
+
+
+## combine estimates using the full dataset and leave-on-out estimates
+pred.est.1d.leave1out <- 
+  # ME using full dataset
+  pred.est.1d %>% select(month_6m, median, ci.lb, ci.ub, pi.lb, pi.ub) %>% 
+  mutate(leave1out.index = "All studies included") %>% 
+  # MR using leave1out 
+  rbind(pred.est.1d.obs) %>% mutate(type = "Effectiveness") 
+
+
+# plot leave1out plot for one dose effectiveness 
+plt.1dose.obs.leave1out <- 
+  make_base_waning_plot(df.plt = df.mr.1d.obs, est.type = "Effectiveness") +
+  coord_cartesian(xlim = c(0,36), 
+                  ylim = c(0, 100)
+  ) +
+  # plot the CI for all leave1out estimates
+  geom_ribbon(aes(x = month_6m*6, ymin = ci.lb, ymax = ci.ub, fill = leave1out.index),
+              data = pred.est.1d.leave1out |> filter(type == "Effectiveness"),
+              alpha = 0.07) +
+  # plot the median lines for all leave1out estimates 
+  geom_line(aes(x = month_6m*6, y = median, color = leave1out.index),size = 1.1, alpha = 0.7,
+            data = pred.est.1d.leave1out |> filter(type == "Effectiveness") %>% filter(leave1out.index != "All studies included")) +
+  # plot the median line using full data
+  geom_line(aes(x = month_6m*6, y = median, group = 1),
+            data = pred.est.1d.leave1out |> filter(type == "Effectiveness" & leave1out.index == "All studies included") %>%
+              filter(month_6m <= 6.2), inherit.aes = F, 
+            size = 1) +
+  # label the estimates using full dataset
+  geom_text(aes(x = month_6m*6, y = median, 
+                label = as.character(paste0(round(median), " [", round(ci.lb), ",", round(ci.ub), "]"))),
+            check_overlap = TRUE, nudge_y = -5, nudge_x = -2, inherit.aes = FALSE,
+            data = (pred.est.1d.leave1out  |> filter(type == "Effectiveness" & leave1out.index == "All studies included"))[6000*c(1,2,3,4,5),]) +
+  # points using full dataset
+  geom_point(aes(x = month_6m*6,  y = median),
+             data = (pred.est.1d.leave1out |> filter(type == "Effectiveness" & leave1out.index == "All studies included" ))[6000*c(1,2,3,4,5),], size = 1.5,
+             inherit.aes = F) +
+  # other styling stuff
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme(legend.position="right",  legend.text=element_text(size=9)) +
+  scale_x_continuous(breaks = c(6, 12, 18, 24, 30), 
+                     labels = as.character(c(6, 12, 18, 24, 30))
+                     #, expand = c(0,0)
+  ) +
+  scale_y_continuous(breaks = c(-100, -50, 0,25, 50, 75, 100), 
+                     labels = as.character(c(-100, -50, 0, 25, 50, 75, 100))
+                     #,expand = c(0,0)
+  ) +
+  guides(fill = FALSE,
+         color=guide_legend(ncol = 1,byrow=TRUE, title.position = "top"))  +
+  labs(color = "Study removed in \nLeave-one-study-out analysis")
+
+
+plt.1dose.obs.leave1out
+
+# ggsave(plot = plt.1dose.obs.leave1out, filename = "../figures/updated_2023SR_figures/plt_waning_1d_leave1out.jpg", height = 5, width = 7.5)
+
+```
+
+
+<br>
+
+### Look at stratified VE
+
+### By age group (under 5/above 5)
+
+### The following studies reported (>= **2 doses**) VE estimates separately for children under 5 and individuals above 5.
+```{r}
+tab.counter <- tab.counter + 1
+
+id_age_stratified <- intersect(df.u5a$StudyID, df.o5a$StudyID)
+df.age <-
+  rbind(
+    df.u5a |> filter(StudyID %in% id_age_stratified) |>
+      mutate(age.group = "Under 5 yo"),
+     df.o5a |> filter(StudyID %in% id_age_stratified) |>
+      mutate(age.group = "Above 5 yo")
+  ) |>
+  mutate(year = str_sub(StudyID,-4,-1)) %>% 
+    arrange(year, StudyDesign, StudyID) %>% 
+  dplyr::select(-year)
+
+
+# there are 5 estimates that miss the upper CI of the VE, calculate them manually
+df.age <- df.age |>
+  mutate(VE.u = ifelse(is.na(VE.u), 1 - exp(yi + 1.96*se), VE.u)) |>
+  mutate(age.class = case_when(age.class == 1 ~ "1~4.9",
+                               age.class == 2 ~ "5~14.9",
+                               age.class == 3 ~ "15+",
+                               age.class == 4 ~ "5+")) 
+
+# add in a set of age-stratified data that was not in the old dataset from previous review 
+qadri2016 <- 
+  data.frame(
+    new.old = rep("old", 3), Paper = rep("Qadri et al, 2016", 3), Location = rep("Bangladesh",3),
+    Mean.VE = c(0.16, 0.63, 0.56), VE.l = c(-0.49, -0.39, 0.16), VE.u = c(0.53, 0.9, 0.77),
+    Vaccine = rep("WC",3), Duration.months = rep(6,3), StudyDesign = rep("Randomized", 3),
+    Doses = c(1,1,1), StudyID = rep("Qadri et al, 2016", 3), se = rep(NA,3), yi = rep(NA, 3),
+    age.group = c("Under 5 yo", "Above 5 yo", "Above 5 yo"), age.class = c("1-4.9", "5-14.9", "15+"),
+    Notes1 = rep(NA,3), Notes2 = rep(NA,3)
+  ) |>
+  mutate(se = ifelse(is.na(VE.u), 
+                     (log(1-Mean.VE)-log(1-VE.l))/qnorm(0.95), 
+                     (log(1-VE.l) - log(1-VE.u))/(2*qnorm(.975))),
+         yi = log(1-Mean.VE))
+
+df.age <- rbind(df.age, qadri2016)
+
+## distinguish one-dose and two-dose estimates for Franke 2018 and Espoir's study
+df.age <- df.age %>%
+  mutate(StudyID = ifelse(StudyID == "Malembaka et al. 2023" & Doses == 2, "Malembaka et al. 2023 (2-dose)", StudyID)) %>%
+  mutate(StudyID = ifelse(StudyID == "Malembaka et al. 2023" & Doses == 1, "Malembaka et al. 2023 (1-dose)", StudyID)) %>%
+  mutate(StudyID = ifelse(StudyID == "Franke et al, 2018" & Doses == 2, "Franke et al. 2018 (2-dose)", StudyID)) %>%
+  mutate(StudyID = ifelse(StudyID == "Franke et al, 2018" & Doses == 1, "Franke et al. 2018 (1-dose)", StudyID))
+  
+
+
+#write.csv(df.age, "../data/df_age_stratified.csv", row.names = F)
+
+tab_age_2dose <- df.age |>
+  mutate(Mean.VE = round(Mean.VE *100), 
+         VE.l = round(VE.l * 100), VE.u = round(VE.u*100)) |>
+  filter(Doses == 2) |>
+  mutate(VE = paste0(Mean.VE, " [", VE.l, ",", VE.u, "]")) |>
+  dplyr::select(Doses, StudyDesign, StudyID, Location, Duration.months, age.group, age.class, VE, Duration.months) |>
+  dplyr::rename(`VE (95% CI)` = VE,
+                `Follow-up time` = Duration.months) |>
+  arrange(StudyDesign)
+  # flextable() |>
+  # merge_v(j = 1:2) |> 
+  # merge_at(j = 4, i = 1:2) |>
+  # merge_at(j = 4, i = 3:4) |>
+  # merge_at(j = 4, i = 5:6) |>
+  # merge_at(j = 4, i = 7:9) |>
+  # merge_at(j = 4, i = 10:12) |>
+  # merge_at(j = 4, i = 13:14) |>
+  # vline() |>
+  # hline() |> 
+  # width(j = c(2,5,7), width = 1.5)
+```
+
+```{r}
+fig.counter <- fig.counter + 1
+
+df.byage.2d <- df.age |> 
+  filter(StudyDesign == "Randomized", Doses == 2) |>
+  dplyr::select(StudyID, Mean.VE, VE.l, VE.u, age.class) |>
+  mutate(StudyID = case_when(StudyID == "Clemens et al, 1990" ~ "Clemens et al.\n 1990",
+                             StudyID == "Trach et al, 1997" ~ "Trach et al.\n 1997",
+                             StudyID == "Sur et al, 2011" ~ "Sur et al.\n 2011",
+                             StudyID == "Qadri et al, 2015" ~ "Qadri et al.\n 2015",
+                             StudyID == "Ali et al, 2021" ~ "Ali et al.\n 2021")) |>
+  mutate(age.class = factor(age.class, levels = c("1~4.9", "5~14.9", "15+", "5+"))) |>
+  mutate(StudyID = factor(StudyID, 
+                          levels = c("Clemens et al.\n 1990", "Trach et al.\n 1997", "Sur et al.\n 2011", "Qadri et al.\n 2015", "Ali et al.\n 2021"))) 
+
+plt.byage.2d <- 
+  df.byage.2d |>
+  ggplot() +
+  geom_point(aes(x = StudyID, y = Mean.VE*100, color = age.class), position = position_dodge(0.3)) +
+  geom_errorbar(aes(x = StudyID, ymin = VE.l*100, ymax = VE.u*100, color = age.class), width = 0.1, position = position_dodge(0.3)) +
+  # add an arrow for the -850 lower bound 
+  scale_color_brewer(palette = "Greens") +
+  theme(axis.text.x = element_text(angle = 0)) +
+  scale_color_manual(values=c("salmon", brewer.pal(n = 9, name = "Greens")[c(5,7,9)])) +
+  xlab("Study") +
+  ylab("kOCV Efficacy (%)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("kOCV efficacy by age group (>= 2 doses)")
+
+plt.byage.2d
+
+ggsave(plot = plt.byage.2d, filename = here("figures/updated_2023SR_figures/plt_byage_2d.jpg"), height = 5, width = 8)
+```
+
+<br>
+
+### what about adding the **1-dose** estimations:
+```{r}
+tab.counter <- tab.counter + 1
+tab_age_1dose <- df.age |>
+  mutate(Mean.VE = round(Mean.VE *100), 
+         VE.l = round(VE.l * 100), VE.u = round(VE.u*100)) |>
+  filter(Doses == 1) |>
+  mutate(VE = paste0(Mean.VE, " [", VE.l, ",", VE.u, "]")) |>
+  dplyr::select(Doses, StudyDesign, StudyID, Location, Duration.months, age.group, age.class, VE, Duration.months) |>
+  dplyr::rename(`VE (95% CI)` = VE,
+                `Follow-up time` = Duration.months) |>
+  arrange(StudyDesign, `Follow-up time`)
+  # flextable() |>
+  # merge_v(j = 1:2) |> 
+  # merge_at(j = 4, i = 1:2) |>
+  # merge_at(j = 4, i = 3:4) |>
+  # merge_at(j = 4, i = 5:7) |>
+  # merge_at(j = 4, i = 8:10) |>
+  # vline() |>
+  # hline() |> 
+  # width(j = c(2,5,7), width = 1.5)
+```
+
+<br>
+
+### **Figure `r fig.counter`.** Adding the two 1-dose efficacy estimations into the above plot.
+```{r fig.height=5, wid.height=9}
+fig.counter <- fig.counter + 1
+
+df.byage.1d2d <- df.age |> 
+  filter(StudyDesign == "Randomized") |>
+  dplyr::select(StudyID, Mean.VE, VE.l, VE.u, age.class, Doses) |>
+  mutate(age.class = factor(age.class, levels = c("1~4.9", "5~14.9", "15+", "5+"))) |>
+  arrange(desc(Doses)) |>
+  mutate(StudyID = case_when(StudyID == "Clemens et al, 1990" ~ "Clemens et al.\n 1990\n (3 doses)",
+                             StudyID == "Trach et al, 1997" ~ "Trach et al.\n 1997\n (2 doses)",
+                             StudyID == "Sur et al, 2011" ~ "Sur et al.\n 2011\n (2 doses)",
+                             StudyID == "Qadri et al, 2015" ~ "Qadri et al.\n 2015\n (2 doses)",
+                             StudyID == "Ali et al, 2021" ~ "Ali et al.\n 2021\n (2 doses)",
+                             TRUE ~ StudyID)) |>
+  mutate(StudyID = case_when(StudyID == "Qadri et al, 2016" ~ "Qadri et al.\n 2016 \n (1 dose)",
+                             StudyID == "Qadri et al, 2018" ~ "Qadri et al.\n 2018 \n (1 dose)",
+                             TRUE ~ StudyID)) |>
+  mutate(StudyID = factor(StudyID, 
+                          levels = c("Clemens et al.\n 1990\n (3 doses)", "Trach et al.\n 1997\n (2 doses)", "Sur et al.\n 2011\n (2 doses)", "Qadri et al.\n 2015\n (2 doses)", "Ali et al.\n 2021\n (2 doses)", "Qadri et al.\n 2016 \n (1 dose)", "Qadri et al.\n 2018 \n (1 dose)")))
+
+
+plt.byage.1d2d <- 
+  df.byage.1d2d |>
+  ggplot() +
+  geom_point(aes(x = StudyID, y = Mean.VE*100, color = age.class), position = position_dodge(0.3)) +
+  geom_errorbar(aes(x = StudyID, ymin = VE.l*100, ymax = VE.u*100, color = age.class), width = 0.1, position = position_dodge(0.3)) +
+  # add an arrow for the -850 lower bound 
+  scale_color_brewer(palette = "Greens") +
+  theme(axis.text.x = element_text(angle = 0)) +
+  scale_color_manual(values=c("salmon", brewer.pal(n = 9, name = "Greens")[c(5,7,9)])) +
+  xlab("Study") +
+  ylab("kOCV Efficacy (%)") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ggtitle("kOCV efficacy by age group (1 or 2 doses)") 
+
+plt.byage.1d2d
+
+ggsave(plot = plt.byage.1d2d, filename = here("figures/updated_2023SR_figures/plt_byage_1d2d.jpg"), height = 5, width = 9)
+```
+
+
+<br>
+
+### **Table `r tab.counter`.** Data included in the above figure
+```{r}
+tab.counter <- tab.counter + 1
+
+tab_age <- tab_age_2dose |> rbind(tab_age_1dose) |> 
+  mutate(Doses = ifelse(StudyID == "Clemens et al, 1990", 3, Doses)) |> 
+  arrange(desc(Doses)) |>
+  flextable() |>
+  merge_v(j = 1:3) |>
+  vline() |>
+  hline() |>
+  width(j = c(3,6,8), width = 1.5)
+
+tab_age
+
+save_as_docx(tab_age, path = here("tables/tab_age.docx"))
+```
+
+<br>
+
+### **Figure `r fig.counter`.** Efficacy by age group (stratified meta-analysis)
+### 2-dose Efficacy
+```{r}
+fir.counter <- fig.counter + 1
+
+ve_forest_byage(dose = 2, vaccine_type = "WC", 
+                dat = df.age |> mutate(Vaccine = "WC") |> filter(StudyDesign == "Randomized" ))
+pdf(here("figures/updated_2023SR_figures/ve_forest_byage_2d.pdf"), width = 6, height = 5)
+ve_forest_byage(dose = 2, vaccine_type = "WC", 
+                dat = df.age |> mutate(Vaccine = "WC") |> filter(StudyDesign == "Randomized" ))
+dev.off()
+
+```
+
+### 1-dose Efficacy
+```{r}
+ve_forest_byage(dose = 1, vaccine_type = "WC", 
+                dat = df.age |> mutate(Vaccine = "WC") |> filter(StudyDesign == "Randomized" ))
+pdf(here("figures/updated_2023SR_figures/ve_forest_byage_1d_rct.pdf"), width = 6, height = 5)
+ve_forest_byage(dose = 1, vaccine_type = "WC", 
+                dat = df.age |> mutate(Vaccine = "WC") |> filter(StudyDesign == "Randomized" ))
+dev.off()
+```
+
+
+### 1-dose Efficacy and effectivenss combined
+```{r}
+ve_forest_byage(dose = 1, vaccine_type = "WC", 
+                dat = df.age |> mutate(Vaccine = "WC"))
+pdf(here("figures/updated_2023SR_figures/ve_forest_byage_1d_rct_obs.pdf"), width = 6, height = 5)
+ve_forest_byage(dose = 1, vaccine_type = "WC", 
+                dat = df.age |> mutate(Vaccine = "WC"))
+dev.off()
+```
+
+
+Note: a: 5-15, b: 15+
+
+<br>
+
+### Relative VE (>=5 as REF group)
+
+### **Figure `r fig.counter`.** VE by age group, with relative VE
+```{r, fig.width=8, fig.height=4}
+fig.counter <- fig.counter + 1
+
+# pool the above 5yo groups: some studies reported VE for 5-15 and 15+ separately, pool them together to represent 5+ group
+
+index <- 
+  (df.age |>  
+  filter(age.group == "Above 5 yo") |>
+  group_by(StudyID) |>
+  count() |> filter(n > 1))$StudyID
+
+temp.a5o <- df.age |> 
+  filter(StudyID %in% index &
+           age.group == "Above 5 yo") |>
+  dplyr::select(-age.class, -Notes1, -Notes2)
+  
+for (idx in index) {
+  temp <- temp.a5o |> filter(StudyID == idx)
+  tau_estim_method <- "EB" 
+  
+  temp_rma <- rma(yi = log(1 - temp$Mean.VE),
+                  sei = temp$se,
+                  method = tau_estim_method)
+  temp$Mean.VE <- as.numeric(1-exp(temp_rma$b))
+  temp$VE.l <- 1-exp(temp_rma$ci.ub)
+  temp$VE.u <- 1-exp(temp_rma$ci.lb)
+  temp$se <- NA
+  temp$yi <- NA
+  
+  if(which(index == idx) == 1){temp.a5o.pooled <- temp[1,]}
+  if(which(index == idx) != 1){temp.a5o.pooled <- rbind(temp.a5o.pooled, temp[1,])}
+   
+}
+
+# SE from delta method for y/x
+get_se_ratio <- function(y,x,se.y,se.x){
+  sqrt(se.y^2/y^2 + se.x^2/x^2)
+}
+
+# combine the pooled estimates of >5 age groups with other data rows
+df.age.pooled <- 
+  rbind(
+    df.age |>
+      filter(StudyID %in% index == FALSE |
+               (StudyID %in% index & age.group == "Under 5 yo")) |>
+      dplyr::select(-age.class, -Notes1, -Notes2),
+    temp.a5o.pooled
+  ) |>
+  # calculate yi and se 
+  mutate(se = ifelse(is.na(VE.u), 
+                     (log(1-Mean.VE)-log(1-VE.l))/qnorm(0.95), 
+                     (log(1-VE.l) - log(1-VE.u))/(2*qnorm(.975))),
+         yi = log(1-Mean.VE))
+```
+
+
+### <span style="color: red;">Questions:</span> 
+Now we have 8 pairs of OCV estimates (each pair: one estimate for children under 5, and one estimate for participants >=5). 
+
+
+```{r}
+# get point estimate of relative VE for each study: (<5 VE divided by >5 VE)
+# using delta method (code supplied by Andrew)
+df.age.pooled <- df.age.pooled |>
+  group_by(StudyID) |>
+  mutate(VE.ratio = Mean.VE[age.group == "Under 5 yo"]/Mean.VE[age.group == "Above 5 yo"],
+         VE.ratio.l = exp(log(VE.ratio) - qnorm(.975)*get_se_ratio(
+                                                          Mean.VE[age.group == "Under 5 yo"],
+                                                          Mean.VE[age.group == "Above 5 yo"],
+                                                          se[age.group == "Under 5 yo"],
+                                                          se[age.group == "Above 5 yo"])),
+         VE.ratio.u = exp(log(VE.ratio) + qnorm(.975)*get_se_ratio(
+                                                          Mean.VE[age.group == "Under 5 yo"],
+                                                          Mean.VE[age.group == "Above 5 yo"],
+                                                          se[age.group == "Under 5 yo"],
+                                                          se[age.group == "Above 5 yo"])))
+```
+
+```{r, fig.width = 8, fig.height = 4}
+# make dataset for the plot
+col.ve <- df.age.pooled %>%
+  select(StudyID, Doses, Mean.VE, VE.l, VE.u, age.group, StudyDesign) %>%
+  mutate(VE = paste0(round(Mean.VE,2), " [", 
+                     round(VE.l,2), ", ",
+                     round(VE.u,2), "]")) %>% 
+  select(-c(Mean.VE, VE.l, VE.u)) %>%
+  pivot_wider(names_from = "age.group", values_from = "VE")
+
+col.ratio <- df.age.pooled %>%
+  select(StudyID, Doses, VE.ratio, VE.ratio.l, VE.ratio.u) %>%
+  unique() %>%
+  mutate(VE.ratio.CI = paste0(round(VE.ratio,2), " [", 
+                       round(VE.ratio.l,2), ", ",
+                       round(VE.ratio.u,2), "]")) 
+
+df.relVE <- col.ve %>%
+  left_join(col.ratio, by = c("StudyID", "Doses")) %>%
+  arrange(Doses)
+  
+
+tab.relVE <- df.relVE %>% select(-c(VE.ratio, VE.ratio.l, VE.ratio.u)) %>% flextable() %>% width(width = 2, j = c(1,3,4,5, 6))
+tab.relVE
+  
+# save_as_docx(tab.relVE, path = here("tables/relVE.docx"))
+save_as_docx(tab.relVE, path = "../tables/relVE.docx")
+```
+
+### Remove the data row of Qadri et al, 2018, because VE under 5 is negative, ratio is also negative
+
+<br>
+
+```{r}
+# remove the data row of Qadri et al, 2018, because VE under 5 is negative, ratio is also negative
+```
+
+```{r}
+# make plot of relative VE
+plot_age_stratified_ve(data = df.relVE %>% select(-c(VE.ratio.l, VE.ratio.u)) %>% 
+                         filter(StudyID != "Qadri et al, 2018"),
+                              VE.ratio.pooled = NA,
+                              VE.ratio.pooled.w.ci = NA)
+```
+
+<br>
+
+### VE ~ proportion under 5 
+Added on Feb. 28 2024
+```{r, fig.width = 8, fig.height = 4}
+# read in the proportion under 5 data in sheet "age_data" in the extraction gsheet 
+df.prop <- read.csv("../data/propUnder5_data.csv") %>%
+  rename(propUnder5 = prop_under5...this.is.not.percentage.) %>%
+  dplyr::select(study_id, study_type, VE_mean, VE_l, VE_u, dose, tl, tr, propUnder5) %>%
+  mutate(mid_time = (tl + tr)/2) %>%
+  mutate(perc_under5 = propUnder5 * 100) %>%
+  filter(dose == 1 | dose == 2)  %>% filter(!is.na(perc_under5)) %>%
+  mutate(VE_u = ifelse(VE_u == "/", NA, VE_u)) %>%
+  mutate(VE_mean = as.numeric(VE_mean)/100, VE_l = as.numeric(VE_l)/100, VE_u = as.numeric(VE_u)/100) %>%
+  mutate(se = ifelse(is.na(VE_u), 
+                     (log(1-VE_mean)-log(1-VE_l))/qnorm(0.95), 
+                     (log(1-VE_l) - log(1-VE_u))/(2*qnorm(.975))),
+         yi = log(1-VE_mean)) %>%
+  mutate(var = se * se) %>% 
+  rename(DataID = study_id) %>%
+  mutate(StudyID = ifelse(DataID != "Trach_1997", str_sub(DataID, end = -2), DataID)) %>%
+  filter(perc_under5 < 100 & perc_under5 > 0) 
+
+
+
+df.prop %>% 
+  ggplot() +
+  geom_point(aes(x = perc_under5, y = VE_mean*100, color = perc_under5, shape = study_type), size = 2) +
+  facet_grid(. ~ dose) +
+  ylab("Vaccine efficacy / effectiveness (%)") +
+  xlab("Percentage of cases under 5") +
+  scale_color_gradient(low = "skyblue", high = "navyblue") +
+  theme_bw()
+
+```
+
+
+```{r fig.width = 8, fig.height = 4}
+# fit the meta regression model using rma.mv, considering the random effect for each study
+log.percUnder5.2d <- rma.mv(yi = yi, V = var, slab = StudyID, method = "REML",
+                         mods = ~  perc_under5,
+                         random = ~ 1 | StudyID/DataID,
+                         data = df.prop %>% filter(dose==2))
+
+log.percUnder5.1d <- rma.mv(yi = yi, V = var, slab = StudyID, method = "REML",
+                         mods = ~  perc_under5,
+                         random = ~ 1 | StudyID/DataID,
+                         data = df.prop %>% filter(dose==1))
+
+percUnder5.pred.1d <- predict(log.percUnder5.1d, newmods=seq(0,100,1), transf=function(x) 1-exp(x), addx=TRUE)
+percUnder5.pred.2d <- predict(log.percUnder5.2d, newmods=seq(0,100,1), transf=function(x) 1-exp(x), addx=TRUE)
+
+
+percUnder5.pred <- rbind(percUnder5.pred.1d %>% as.data.frame() %>% mutate(dose = "One dose"),
+                         percUnder5.pred.2d %>% as.data.frame() %>% mutate(dose = "Two doses"))
+
+plt.percUnder5 <- 
+  df.prop %>% 
+  filter(perc_under5 > 0 & perc_under5 < 100) %>%
+  mutate(dose = ifelse(dose == 1, "One dose", "Two doses")) %>%
+  ggplot() +
+  geom_point(aes(x = perc_under5, y = VE_mean*100, color = mid_time, shape = study_type), size = 2) +
+  facet_grid(. ~ dose) +
+  ylab("OCV efficacy / effectiveness (%)") +
+  xlab("Percentage of cases under 5 years old (%)") +
+  scale_color_gradient(low = "skyblue", high = "navyblue") +
+  theme_bw() +
+  geom_line(aes(x = X.perc_under5, y = pred*100), data = percUnder5.pred) +
+  ylim(c(20,100)) +
+  xlim(c(0,80)) +
+  labs(color = "Follow-up time\n (months)", shape = "Study type")
+
+
+ggsave(plt.percUnder5, filename = here::here("figures/updated_2023SR_figures/percUnder5.jpg"), height = 4, width = 8)
+```
+
+<br>
+
+### Look at the distribution of under 5 percentage for efficacy and effectiveness studies.
+
+```{r}
+percUnder5.boxplot <- 
+  df.prop %>%
+  dplyr::select(perc_under5, study_type) %>%
+  filter(perc_under5 < 100 & perc_under5 > 0) %>%
+  ggplot() +
+  geom_boxplot(aes(x = study_type, y = perc_under5), width = 0.5) +
+  theme_classic() +
+  xlab("Study type") +
+  ylab("Percentage of cholera cases under 5 (%)") +
+  #geom_point(aes(x = study_type, y = perc_under5)) +
+  geom_jitter(aes(x = study_type, y = perc_under5), height = 0.5)
+
+ggsave(percUnder5.boxplot, filename = "../figures/updated_2023SR_figures/percUnder5_boxplot.jpg", height = 4, width = 6)
+
+# median proportion under 5 and above 5
+df.prop %>% dplyr::select(perc_under5, study_type) %>%
+  group_by(study_type) %>%
+  summarize(median = median(perc_under5))
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+

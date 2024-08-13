@@ -1,0 +1,39 @@
+"Author, Year",Location,Mean-VE,VE-l,VE-u,Vaccine,Duration-months,StudyDesign,Doses,age-class,location,Notes
+"Sur et al, 2011",India,0.66,0.53,,WC,36,Randomized,2,0,Asia,
+"Sanchez et al, 1994",Peru,0.86,0.37,0.97,WC-rBS,4,Randomized,2,0,Americas,17+ so no kids in this one; symptomatic infection
+"Clemens et al, 1990a",Bangladesh,0.64,0.45,,WC-rBS,36,Randomized,2,0,Asia,
+"Clemens et al, 1990b",Bangladesh,0.39,0.12,,WC,36,Randomized,2,0,Asia,
+"Qadri et al, 2015",Bangladesh,0.53,0.29,0.68,WC,24,Randomized,2,0,Asia,Total VE; noncumulative 1st 2nd yr
+"Trach et al, 1997",Vietnam,0.66,0.46,0.79,WC,10,Randomized,2,0,Asia,
+"Taylor et al, 2000",Peru,-0.3,-3.38,0.65,WC-rBS,10,Randomized,2,0,Americas,hospitalized only
+"Wierzba et al, 2015",India,0.69,0.145,0.888,WC,34,Observational,2,0,Asia,
+"Ivers et al, 2015",Haiti,0.62,0.06,0.85,WC,22,Observational,2,0,Americas,"noncumulative estimates 14 month and after available, not by dose"
+"Luquero et al, 2014",Guinea,0.866,0.567,0.958,WC,5,Observational,2,0,Africa,"RDT; Two study areas, vaccination dates were off by 1 month, same study period tho"
+"Khatib et al, 2012",Tanzania,0.79,0.47,0.92,WC-rBS,15,Observational,2,0,Africa,
+"Lucas et al, 2005",Mozambique,0.84,0.43,0.95,WC-rBS,5,Observational,2,0,Africa,This is per-protocol
+"Qadri et al, 2016",Bangladesh,0.4,0.11,0.6,WC,6,Randomized,1,0,Asia,Total VE
+"Clemens et al, 1990a",Bangladesh,0.12,-0.29,,WC-rBS,36,Randomized,1,0,Asia,
+"Clemens et al, 1990b",Bangladesh,0.24,-0.12,,WC,36,Randomized,1,0,Asia,
+"Luquero et al, 2014",Guinea,0.428,-0.836,0.822,WC,5,Observational,1,0,Africa,"RDT; Two study areas, vaccination dates were off by 1 month, same study period tho"
+"Ivers et al, 2015",Haiti,0.67,-0.62,0.93,WC,22,Observational,1,0,Americas,"noncumulative estimates 14 month and after available, not by dose"
+"Wierzba et al, 2015",India,0.325,-3.18,0.891,WC,34,Observational,1,0,Asia,=
+"Azman et al, 2016",South Sudan,0.873,0.702,1,WC,2,Observational,1,0,Africa,
+"Khatib et al, 2012",Tanzania,0.46,-0.8,0.83,WC-rBS,15,Observational,1,0,Africa,
+"Sur et al, 2011",India,0.43,0.07,,WC,36,Randomized,2,1,Asia,1-4.9
+"Trach et al, 1997",Vietnam,0.68,0.14,0.88,WC,10,Randomized,2,1,Asia,
+"Clemens et al, 1990a",Bangladesh,0.26,0.04,,WC-rBS,36,Randomized,2,1,Asia,2-4.9
+"Clemens et al, 1990b",Bangladesh,0.23,0.01,,WC,36,Randomized,2,1,Asia,2-4.9
+"Qadri et al, 2015",Bangladesh,0.44,-0.35,0.77,WC,24,Randomized,2,1,Asia,1-4.9
+"Ivers et al, 2015",Haiti,0.5,-85,0.97,WC,22,Observational,2,1,Americas,1-4.9
+"Lucas et al, 2005",Mozambique,0.82,-0.19,0.98,WC-rBS,5,Observational,2,1,Africa,2-4.9
+"Sur et al, 2011",India,0.88,0.71,,WC,36,Randomized,2,2,Asia,5-14
+"Sur et al, 2011",India,0.61,0.37,,WC,36,Randomized,2,3,Asia,15-Inf
+"Sanchez et al, 1994",Peru,0.86,0.37,0.97,WC-rBS,4,Randomized,2,3,Americas,"17-65 years old, military recruits"
+"Clemens et al, 1990a",Bangladesh,0.63,0.53,,WC-rBS,36,Randomized,2,4,Asia,5+
+"Clemens et al, 1990b",Bangladesh,0.68,0.59,,WC,36,Randomized,2,4,Asia,5+
+"Qadri et al, 2015",Bangladesh,0.63,-0.39,0.9,WC,24,Randomized,2,2,Asia,5-14.9
+"Qadri et al, 2015",Bangladesh,0.56,0.31,0.72,WC,24,Randomized,2,3,Asia,15-Inf
+"Ivers et al, 2015",Haiti,0.72,0.36,0.88,WC,22,Observational,2,4,Americas,5-Inf
+"Lucas et al, 2005",Mozambique,0.67,0.16,0.86,WC-rBS,5,Observational,2,4,Africa,5-Inf
+"Lucas et al, 2005",Mozambique,0.72,0.24,0.91,WC-rBS,5,Observational,2,3,Africa,15-Inf
+"Trach et al, 1997",Vietnam,0.66,0.42,0.8,WC,10,Randomized,2,4,Asia,>5

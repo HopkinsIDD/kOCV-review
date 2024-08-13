@@ -1,0 +1,8 @@
+Study,Location,Study design,Vaccine,Duration of estimates,Dose for main outcome,Study population,Serotypes,Numbers of patients with cholera,new_old
+Sur et al. 2011,"Kolkata, India",Cluster-randomized placebo-controlled trial,Whole-cell,2 years; 3 years (P); and 5 years,Two,All non-pregnant individuals aged ≥1 year,Inaba and Ogawa,166,old
+Clemens et al. 1990,"Matlab, Bangladesh",Individually randomized placebo-controlled trial,Whole-cell or whole-cell with B-subunit,"6 months and 1, 3 (P), and 4 years",Three,"Children aged 2-15 years and all women aged >15 years, non-pregnant",Inaba and Ogawa,81 (WC) and 68 (WC-rBS),old
+Qadri et al. 2015,"Dhaka, Bangladesh",Cluster randomized trial,Whole-cell,2 years,Two,All non-pregnant individuals aged ≥1 year,Inaba and Ogawa,139,old
+Qadri et al. 2016,"Dhaka, Bangladesh",Individually randomized placebo-controlled trial,Whole-cell,6 months,One,All non-pregnant individuals aged ≥1 year,Inaba and Ogawa,101,old
+Trach et al. 1997,"Hue, Vietnam",Household randomized trials without placebo,Whole-cell,10 months,Two,All individuals aged ≥1 year,Ogawa,117,old
+Qadri et al. 2018,"Dhaka, Bangladesh",Individually randomized placebo-controlled trial,Whole-cell,2 years,One,All non-pregnant individuals aged ≥1 year,Inaba and Ogawa,287 first cholera episodes,new follow up to Qadri et al 2016
+Ali et al. 2021,"Dhaka, Bangladesh",Cluster-randomized placebo-controlled trial,Whole-cell,4 years,Two,All non-pregnant individuals aged ≥1 year,Inaba and Ogawa,140 first cholera episodes,new follow up to Qadri et al 2015
