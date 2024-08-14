@@ -42,7 +42,7 @@ source("utils_OCV_SR.R")
 
 
 ```{r load data}
-df_new <- read.csv(here("data/extracted_SR_data_2016_2022.csv"))
+df_new <- read.csv(here("data/extracted_SR_data_2017_2024.csv"))
 df_old_FollowupPeriod <- read.csv(here("data/FollowupPeriodData.csv"))
 df_old_main <- read.csv(here("data/ve_meansvar.csv"))
 efficacy_studies <- read.csv(here("data/efficacy_studies.csv"))
