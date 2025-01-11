@@ -1,4 +1,4 @@
-# kOCV-review
+# Protection from Killed Whole-Cell Cholera Vaccines: A Systematic Review and Meta-Analysis
 
 This is the repository for the [manuscript](https://www.medrxiv.org/content/10.1101/2024.08.13.24311930v2) titled "Protection from Killed Whole-Cell Cholera Vaccines: A Systematic Review and Meta-Analysis," by Xu and Tiffany et al (2025). This systematic review builds upon a [previous systematic review](https://www.thelancet.com/journals/laninf/article/PIIS1473-3099(17)30359-6/fulltext) by Bi et al. titled "Protection against cholera from killed whole-cell oral cholera vaccines: a systematic review and meta-analysis" published on Lancet Infectious Disease in 2017.  
 
